@@ -375,6 +375,17 @@ def existing_event_action(action, zone):
     return {"answer": answer, "edit_event": event, "changes": changes, "calendar_date": str(calendar_day)}
 
 
+def conflicting_events(db, marker, values, event_id=0):
+    if values[5]:
+        return []
+    rows = db.execute(
+        f"SELECT * FROM events WHERE starts_at < {marker} AND ends_at > {marker} "
+        f"AND id <> {marker} AND all_day = 0 ORDER BY starts_at, id",
+        (values[3], values[2], event_id),
+    )
+    return [dict(row) for row in rows]
+
+
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, value, status=200):
         self.send_content(json.dumps(value).encode(), "application/json", status)
@@ -418,6 +429,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(clarification if isinstance(clarification, dict) else {"answer": clarification})
                 else:
                     self.send_json(help_reply(data))
+            elif self.path == "/agent/confirm-add":
+                self.change_event(data, agent_add=True, confirmed=True)
             elif self.path == "/agent/confirm-removal":
                 self.send_json(confirm_agent_removal(data))
             elif self.path in ("/events", "/conflicts", "/delete"):
@@ -429,9 +442,9 @@ class Handler(BaseHTTPRequestHandler):
         except RuntimeError as exc:
             self.send_json({"error": str(exc)}, 503)
 
-    def change_event(self, data, agent_add=False):
+    def change_event(self, data, agent_add=False, confirmed=False):
         marker = "%s" if USE_POSTGRES else "?"
-        event_id = int(data.get("id") or 0)
+        event_id = 0 if agent_add else int(data.get("id") or 0)
         with database() as db:
             if self.path == "/delete":
                 db.execute(f"DELETE FROM events WHERE id = {marker}", (event_id,))
@@ -439,12 +452,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 values = event_values(data)
                 if self.path == "/conflicts":
-                    rows = db.execute(
-                        f"SELECT * FROM events WHERE starts_at < {marker} AND ends_at > {marker} "
-                        f"AND id <> {marker} AND all_day = 0 ORDER BY starts_at",
-                        (values[3], values[2], event_id)
-                    )
-                    result = [] if values[5] else [dict(row) for row in rows]
+                    result = conflicting_events(db, marker, values, event_id)
                 elif event_id:
                     cursor = db.execute(
                         f"UPDATE events SET title={marker}, summary={marker}, starts_at={marker}, "
@@ -452,19 +460,33 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     result = {"ok": True, "starts_at": values[2]} if cursor.rowcount else {"error": "Event no longer exists."}
                 else:
-                    placeholders = ", ".join([marker] * 6)
-                    db.execute(
-                        "INSERT INTO events (title, summary, starts_at, ends_at, zone, all_day) "
-                        f"VALUES ({placeholders})", values
-                    )
-                    result = {"ok": True, "starts_at": values[2]}
-                    if agent_add:
-                        if values[5]:
-                            timing = f"{data['start'][:10]} (all day)"
+                    conflicts = []
+                    if agent_add and not confirmed and not values[5]:
+                        if USE_POSTGRES:
+                            db.execute("LOCK TABLE events IN SHARE ROW EXCLUSIVE MODE")
                         else:
-                            timing = f"{data['start'][:10]}, {data['start'][11:]} to {data['end'][11:]} ({values[4]})"
-                        result["answer"] = f"Added {values[0]} for {timing}."
-                        result["calendar_date"] = data["start"][:10]
+                            db.execute("BEGIN IMMEDIATE")
+                        conflicts = conflicting_events(db, marker, values)
+                    if conflicts:
+                        result = {
+                            "answer": f"{values[0]} overlaps with an existing event. Add it anyway?",
+                            "conflicts": conflicts,
+                            "pending_add": data,
+                        }
+                    else:
+                        placeholders = ", ".join([marker] * 6)
+                        db.execute(
+                            "INSERT INTO events (title, summary, starts_at, ends_at, zone, all_day) "
+                            f"VALUES ({placeholders})", values
+                        )
+                        result = {"ok": True, "starts_at": values[2]}
+                        if agent_add:
+                            if values[5]:
+                                timing = f"{data['start'][:10]} (all day)"
+                            else:
+                                timing = f"{data['start'][:10]}, {data['start'][11:]} to {data['end'][11:]} ({values[4]})"
+                            result["answer"] = f"Added {values[0]} for {timing}."
+                            result["calendar_date"] = data["start"][:10]
         self.send_json(result, 404 if isinstance(result, dict) and "error" in result else 200)
 
 

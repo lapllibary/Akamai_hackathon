@@ -55,6 +55,7 @@ button.day{background:#ffe2c4;border-color:#edc39f;color:#492b1a}
 button.day[aria-pressed="true"]{background:#f5ae70;border-color:#a95122;color:#32180d}
 button.day[aria-current="date"]{box-shadow:inset 0 0 0 1px #a95122}
 .event-editor input:not([type="checkbox"]),.event-editor textarea{background:#fff0df;border-color:#b98560}
+.agent-warning{background:#fff0df;border:1px solid #b98560;border-radius:8px;color:#5e320e;padding:10px 12px;overflow-wrap:anywhere}
 </style>
 <main>
 <header><h1>Schedule Inbox</h1><p>Turn a message into an event and check it against your agenda.</p></header>
@@ -460,6 +461,42 @@ function appendHelpMessage(speaker, text) {
   helpLog.scrollTop = helpLog.scrollHeight;
 }
 
+function showAgentAddConfirmation(event) {
+  const controls = document.createElement('div');
+  controls.className = 'agent-actions';
+  const cancel = action('Cancel', () => {
+    controls.remove();
+    appendHelpMessage('Schedule agent', 'Event was not added.');
+    helpQuestion.focus();
+  });
+  const add = action('Add anyway', async () => {
+    cancel.disabled = true;
+    add.disabled = true;
+    let reply;
+    try {
+      reply = await request('/agent/confirm-add', event);
+    } catch (error) {
+      helpStatus.textContent = error.message;
+      cancel.disabled = false;
+      add.disabled = false;
+      return;
+    }
+    controls.remove();
+    helpStatus.textContent = '';
+    appendHelpMessage('Schedule agent', reply.answer);
+    selectedDate = reply.calendar_date;
+    activeMonth = dateFromKey(selectedDate);
+    try {
+      await refresh();
+    } catch (error) {
+      helpStatus.textContent = error.message;
+    }
+  });
+  controls.append(add, cancel);
+  helpLog.append(controls);
+  helpLog.scrollTop = helpLog.scrollHeight;
+}
+
 function showAgentRemoval(event) {
   const controls = document.createElement('div');
   controls.className = 'agent-actions';
@@ -524,6 +561,15 @@ helpForm.onsubmit = async (event) => {
     chatHistory = [...chatHistory, {question, answer: reply.answer.slice(0, 2500)}].slice(-4);
     appendHelpMessage('You', question);
     appendHelpMessage('Schedule help', reply.answer);
+    if (reply.conflicts?.length) {
+      const warning = document.createElement('p');
+      warning.className = 'agent-warning';
+      warning.setAttribute('role', 'alert');
+      warning.textContent = 'Schedule conflict: overlaps with ' +
+        reply.conflicts.map(event => event.title + ' (' + describe(event) + ')').join('; ');
+      helpLog.append(warning);
+      helpLog.scrollTop = helpLog.scrollHeight;
+    }
     if (helpQuestion.value.trim() === question) helpQuestion.value = '';
     helpStatus.textContent = '';
     if (reply.calendar_date) await refresh();
@@ -532,6 +578,7 @@ helpForm.onsubmit = async (event) => {
       for (const name of ['title', 'summary', 'start', 'end', 'zone']) fields[name].value = reply.changes[name];
       fields.all_day.checked = reply.changes.all_day;
     }
+    if (reply.pending_add) showAgentAddConfirmation(reply.pending_add);
     if (reply.pending_removal) showAgentRemoval(reply.pending_removal);
   } catch (error) {
     helpStatus.textContent = error.message;
