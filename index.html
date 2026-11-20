@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule Inbox</title>
+<style>
+*{box-sizing:border-box} body{margin:0;background:#f5f4ed;color:#182c27;font:16px system-ui}
+main{max-width:1050px;margin:auto;padding:38px 20px} h1{font:clamp(42px,8vw,76px) Georgia;margin:0}
+header p{color:#4b6259;margin:10px 0 28px}
+section{background:#fff;border:1px solid #d6ded6;border-radius:16px;padding:22px;min-width:0}
+h2{font-size:21px;margin:0 0 14px} label{display:block;margin:10px 0}
+input,textarea,button{font:inherit;border-radius:8px} input,textarea{width:100%;border:1px solid #81978a;padding:9px;margin-top:4px}
+button{background:#185441;color:white;padding:8px 13px;border:1px solid #185441;cursor:pointer}
+button.secondary{background:white;color:#185441} button:disabled{opacity:.5;cursor:wait}
+.actions{display:flex;flex-wrap:wrap;gap:8px} .event{border-top:1px solid #d6ded6;padding:13px 0}
+.event p{margin:4px 0 9px} #conflicts{color:#804100} #status{min-height:1.5em}
+.assistant{margin-top:20px} #help-log{max-height:280px;overflow:auto}
+.chat-message{padding:10px 12px;background:#f5f4ed;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+#help-status:empty{display:none}
+header p{margin-bottom:22px}
+.workspace{display:grid;grid-template-columns:minmax(0, 1.55fr) minmax(280px, 1fr);gap:20px;align-items:start}
+.assistant{margin-top:0}
+.calendar-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.calendar-heading h2{margin:0}
+.calendar-controls{display:flex;gap:5px;align-items:center}
+.calendar-controls button{padding:5px 9px}
+.weekdays,.month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.weekdays span{text-align:center;color:#4b6259;font-size:.75rem;padding:6px 0}
+button.day{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-height:58px;width:100%;text-align:left;background:#f8f9f5;color:#18332b;border:1px solid #d6ded6;padding:5px;font-size:.85rem}
+button.day[aria-pressed="true"]{background:#185441;color:white;border-color:#185441}
+button.day[aria-current="date"]{box-shadow:inset 0 0 0 1px #185441}
+.day-count{font-size:.65rem}
+.agent-actions{display:flex;flex-wrap:wrap;gap:6px}
+.agent-actions button{font-size:.85rem}
+.agent-actions button:disabled{cursor:wait}
+#help-log .user-message{background:#e2eee7;margin-left:18px}
+#help-log .agent-message{margin-right:18px}
+.calendar-column{display:grid;gap:16px;min-width:0}
+.daily-panel .calendar-heading{align-items:center}
+.event-editor{margin-top:14px;padding-top:14px;border-top:1px solid #d6ded6}
+.event-editor h3{margin:0 0 10px}
+#agenda-status:empty,#conflicts:empty,#status:empty{display:none}
+button.remove{color:#822c24;border-color:#a64d43}
+@media(max-width:790px){.workspace{grid-template-columns:1fr}}
+body{background:#2b1913}
+header h1{color:#fff4e9}
+header p{color:#e4c5b2}
+.calendar-heading .actions{align-items:center}
+#all-events-dialog{width:min(620px,calc(100% - 32px));max-height:80vh;padding:22px;border:1px solid #d6ded6;border-radius:16px;color:#182c27}
+#all-events-dialog::backdrop{background:rgba(43,25,19,.68)}
+#all-events-content ol{padding-left:24px;margin-bottom:0}
+#all-events-content li{padding:9px 0;overflow-wrap:anywhere}
+#all-events-content li+li{border-top:1px solid #d6ded6}
+button.day{background:#ffe2c4;border-color:#edc39f;color:#492b1a}
+button.day[aria-pressed="true"]{background:#f5ae70;border-color:#a95122;color:#32180d}
+button.day[aria-current="date"]{box-shadow:inset 0 0 0 1px #a95122}
+.event-editor input:not([type="checkbox"]),.event-editor textarea{background:#fff0df;border-color:#b98560}
+</style>
+<main>
+<header><h1>Schedule Inbox</h1><p>Turn a message into an event and check it against your agenda.</p></header>
+<div class="workspace">
+<div class="calendar-column">
+<section aria-labelledby="month-label">
+<div class="calendar-heading">
+<h2 id="month-label" aria-live="polite"></h2>
+<div class="calendar-controls">
+<button id="prev-month" type="button" class="secondary" aria-label="Previous month">←</button>
+<button id="today" type="button" class="secondary">Today</button>
+<button id="next-month" type="button" class="secondary" aria-label="Next month">→</button>
+</div>
+</div>
+<div class="weekdays" aria-hidden="true"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+<div id="month-grid" class="month-grid" role="group" aria-label="Calendar days"></div>
+</section>
+<section class="daily-panel" aria-labelledby="selected-date">
+<div class="calendar-heading">
+<h2 id="selected-date" aria-live="polite"></h2>
+<div class="actions">
+<button id="show-all-events" type="button" class="secondary" aria-haspopup="dialog">View all events</button>
+<button id="add-selected" type="button">Add event</button>
+</div>
+</div>
+<div id="agenda"></div>
+<p id="agenda-status" role="status"></p>
+<div id="event-editor" class="event-editor" hidden>
+<h3 id="editor-title">Add event</h3>
+<label for="message">Paste a scheduling message</label>
+<textarea id="message" rows="3" maxlength="4000" placeholder="Volunteer check-in Nov 28, 2026, 2–3 p.m., Room 204"></textarea>
+<button type="button" id="draft" class="secondary">Extract draft</button>
+<form id="editor">
+<input type="hidden" name="id">
+<label>Title<input name="title" maxlength="200" required></label>
+<label>Start<input name="start" type="datetime-local" required></label>
+<label>End<input name="end" type="datetime-local" required></label>
+<label>Time zone<input name="zone" required placeholder="America/Los_Angeles"></label>
+<label><input type="checkbox" name="all_day" style="width:auto"> All day</label>
+<label>Summary<input name="summary" maxlength="300"></label>
+<div class="actions">
+<button id="save">Save event</button>
+<button type="button" id="clear" class="secondary">Cancel</button>
+</div>
+</form>
+<p id="conflicts" aria-live="polite"></p><p id="status" role="status"></p>
+</div>
+</section>
+</div>
+<section class="assistant" aria-labelledby="help-title">
+<h2 id="help-title">Schedule agent</h2>
+<p>Ask about your schedule or tell the agent to add, edit, or remove an event. A date without a time is saved as all day.</p>
+<div class="agent-actions">
+<button type="button" class="secondary" data-prompt="What’s my next event?">Next event</button>
+<button type="button" class="secondary" data-prompt="What is on my agenda today?">Today’s agenda</button>
+<button type="button" class="secondary" data-prompt="How do I import an event from a message?">Import help</button>
+<button type="button" class="secondary" id="clear-chat">Clear chat</button>
+</div>
+<div id="help-log" role="log" aria-label="Schedule help replies"></div>
+<form id="help-form">
+<label>Message the agent
+<input id="help-question" maxlength="1000" required placeholder="Add event Akamai Cloud 11.20 3:00-5:00 pm">
+</label>
+<button id="help-send">Ask</button>
+</form>
+<p id="help-status" role="status"></p>
+</section>
+</div>
+</main>
+<dialog id="all-events-dialog" aria-labelledby="all-events-title">
+<div class="calendar-heading">
+<h2 id="all-events-title">All scheduled events</h2>
+<form method="dialog"><button class="secondary" autofocus>Close</button></form>
+</div>
+<p id="all-events-status" role="status"></p>
+<div id="all-events-content"></div>
+</dialog>
+<script>
+const editor = document.querySelector('#editor');
+const eventEditor = document.querySelector('#event-editor');
+const editorTitle = document.querySelector('#editor-title');
+const agendaStatus = document.querySelector('#agenda-status');
+const addSelected = document.querySelector('#add-selected');
+const fields = editor.elements;
+const statusLine = document.querySelector('#status');
+const conflictLine = document.querySelector('#conflicts');
+const agenda = document.querySelector('#agenda');
+const draftButton = document.querySelector('#draft');
+const saveButton = document.querySelector('#save');
+const defaultZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const message = document.querySelector('#message');
+
+async function request(path, data) {
+  const options = data === undefined ? {} : {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+  };
+  const response = await fetch(path, options);
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error);
+  return result;
+}
+
+function clearEditor() {
+  editor.reset();
+  fields.id.value = '';
+  fields.zone.value = defaultZone;
+  conflictLine.textContent = '';
+  statusLine.textContent = '';
+}
+
+function formatter(zone, options) {
+  return new Intl.DateTimeFormat('en-CA', {timeZone: zone, ...options});
+}
+
+function localInput(value, zone) {
+  const parts = formatter(zone, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(value));
+  const p = Object.fromEntries(parts.map(({type, value}) => [type, value]));
+  return p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute;
+}
+
+function describe(event) {
+  if (event.all_day) return 'All day';
+  const format = formatter(event.zone, {dateStyle: 'medium', timeStyle: 'short'});
+  return format.formatRange(new Date(event.starts_at), new Date(event.ends_at)) + ' · ' + event.zone;
+}
+
+function showEditor(title) {
+  editorTitle.textContent = title;
+  eventEditor.hidden = false;
+  fields.title.focus();
+}
+
+function closeEditor() {
+  clearEditor();
+  eventEditor.hidden = true;
+}
+
+function edit(event) {
+  clearEditor();
+  agendaStatus.textContent = '';
+  fields.id.value = event.id;
+  fields.title.value = event.title;
+  fields.summary.value = event.summary;
+  fields.zone.value = event.zone;
+  fields.all_day.checked = Boolean(event.all_day);
+  fields.start.value = localInput(event.starts_at, event.zone);
+  fields.end.value = localInput(event.ends_at, event.zone);
+  showEditor('Edit event');
+}
+
+function action(label, handler) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary';
+  button.textContent = label;
+  button.addEventListener('click', handler);
+  return button;
+}
+
+const monthGrid = document.querySelector('#month-grid');
+const monthLabel = document.querySelector('#month-label');
+const selectedDateLabel = document.querySelector('#selected-date');
+const dateKey = (date) => [
+  date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'),
+  String(date.getDate()).padStart(2, '0')
+].join('-');
+const dateFromKey = (key) => new Date(key + 'T12:00');
+const today = () => dateKey(new Date());
+let selectedDate = today();
+let activeMonth = dateFromKey(selectedDate);
+let events = [];
+
+function eventsOn(day) {
+  return events.filter(event => {
+    const calendarZone = event.all_day ? event.zone : defaultZone;
+    const start = localInput(event.starts_at, calendarZone).slice(0, 10);
+    const lastMoment = new Date(new Date(event.ends_at).getTime() - 1);
+    const end = localInput(lastMoment, calendarZone).slice(0, 10);
+    return start <= day && day <= end;
+  });
+}
+
+function renderCalendar(focusDay = false) {
+  const year = activeMonth.getFullYear();
+  const month = activeMonth.getMonth();
+  monthLabel.textContent = activeMonth.toLocaleDateString(undefined, {month: 'long', year: 'numeric'});
+  monthGrid.replaceChildren();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const dayCount = new Date(year, month + 1, 0).getDate();
+  for (let i = 0; i < firstWeekday; i++) monthGrid.append(document.createElement('span'));
+  for (let day = 1; day <= dayCount; day++) {
+    const date = new Date(year, month, day);
+    const key = dateKey(date);
+    const count = eventsOn(key).length;
+    const button = action(String(day), () => {
+      if (selectedDate !== key) closeEditor();
+      agendaStatus.textContent = '';
+      selectedDate = key;
+      renderCalendar(true);
+      renderAgenda();
+    });
+    button.className = 'day';
+    button.setAttribute('aria-label', date.toLocaleDateString(undefined, {dateStyle: 'full'}) +
+      (count ? ', ' + count + (count === 1 ? ' event' : ' events') : ''));
+    button.setAttribute('aria-pressed', String(key === selectedDate));
+    if (key === today()) button.setAttribute('aria-current', 'date');
+    if (count) {
+      const badge = document.createElement('span');
+      badge.className = 'day-count';
+      badge.textContent = count === 1 ? '1 event' : count + ' events';
+      button.append(badge);
+    }
+    monthGrid.append(button);
+    if (focusDay && key === selectedDate) button.focus();
+  }
+}
+
+function goToMonth(offset) {
+  closeEditor();
+  agendaStatus.textContent = '';
+  activeMonth = new Date(activeMonth.getFullYear(), activeMonth.getMonth() + offset, 1);
+  selectedDate = dateKey(activeMonth);
+  renderCalendar();
+  renderAgenda();
+}
+
+document.querySelector('#prev-month').onclick = () => goToMonth(-1);
+document.querySelector('#next-month').onclick = () => goToMonth(1);
+document.querySelector('#today').onclick = () => {
+  closeEditor();
+  agendaStatus.textContent = '';
+  selectedDate = today();
+  activeMonth = dateFromKey(selectedDate);
+  renderCalendar();
+  renderAgenda();
+};
+addSelected.onclick = () => {
+  clearEditor();
+  agendaStatus.textContent = '';
+  fields.start.value = selectedDate + 'T09:00';
+  fields.end.value = selectedDate + 'T10:00';
+  showEditor('Add event');
+};
+
+const showAllEvents = document.querySelector('#show-all-events');
+const allEventsDialog = document.querySelector('#all-events-dialog');
+const allEventsStatus = document.querySelector('#all-events-status');
+const allEventsContent = document.querySelector('#all-events-content');
+
+showAllEvents.onclick = async () => {
+  allEventsContent.replaceChildren();
+  allEventsStatus.textContent = 'Loading events…';
+  allEventsDialog.showModal();
+  try {
+    const savedEvents = await request('/events');
+    if (!savedEvents.length) {
+      allEventsStatus.textContent = 'No saved events.';
+      return;
+    }
+    const list = document.createElement('ol');
+    for (const event of savedEvents) {
+      const row = document.createElement('li');
+      const title = document.createElement('strong');
+      title.textContent = event.title;
+      const details = document.createElement('div');
+      const timing = event.all_day
+        ? localInput(event.starts_at, event.zone).slice(0, 10) + ' · All day'
+        : describe(event);
+      details.textContent = timing + (event.summary ? ' · ' + event.summary : '');
+      row.append(title, details);
+      list.append(row);
+    }
+    allEventsStatus.textContent = '';
+    allEventsContent.replaceChildren(list);
+  } catch (error) {
+    allEventsStatus.textContent = error.message;
+  }
+};
+
+async function refresh() {
+  events = await request('/events');
+  renderCalendar();
+  renderAgenda();
+}
+
+function renderAgenda() {
+  selectedDateLabel.textContent = dateFromKey(selectedDate).toLocaleDateString(undefined, {dateStyle: 'full'});
+  const dailyEvents = eventsOn(selectedDate);
+  agenda.replaceChildren();
+  if (!dailyEvents.length) agenda.textContent = 'No events on this day.';
+  for (const event of dailyEvents) {
+    const card = document.createElement('article');
+    card.className = 'event';
+    const title = document.createElement('strong');
+    title.textContent = event.title;
+    const details = document.createElement('p');
+    details.textContent = describe(event) + (event.summary ? ' · ' + event.summary : '');
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const remove = action('Remove', () => {
+      const question = document.createElement('p');
+      question.textContent = 'Remove ' + event.title + '?';
+      const cancel = action('Cancel', () => {
+        actions.replaceChildren(editButton, remove);
+        remove.focus();
+      });
+      const confirmRemoval = action('Confirm remove', async () => {
+        confirmRemoval.disabled = true;
+        cancel.disabled = true;
+        try {
+          await request('/delete', {id: event.id});
+          if (Number(fields.id.value) === event.id) closeEditor();
+          await refresh();
+          agendaStatus.textContent = 'Event removed.';
+          addSelected.focus();
+        } catch (error) {
+          agendaStatus.textContent = error.message;
+          confirmRemoval.disabled = false;
+          cancel.disabled = false;
+        }
+      });
+      confirmRemoval.classList.add('remove');
+      actions.replaceChildren(question, confirmRemoval, cancel);
+      cancel.focus();
+    });
+    remove.classList.add('remove');
+    remove.setAttribute('aria-label', 'Remove ' + event.title);
+    const editButton = action('Edit', () => edit(event));
+    editButton.setAttribute('aria-label', 'Edit ' + event.title);
+    actions.append(editButton, remove);
+    card.append(title, details, actions);
+    agenda.append(card);
+  }
+}
+
+document.querySelector('#clear').onclick = () => {
+  closeEditor();
+  addSelected.focus();
+};
+draftButton.onclick = async () => {
+  const zone = fields.zone.value;
+  draftButton.disabled = true;
+  statusLine.textContent = 'Extracting event details…';
+  try {
+    const result = await request('/draft', {text: message.value, zone});
+    clearEditor();
+    fields.zone.value = zone;
+    for (const name of ['title', 'summary', 'start', 'end']) fields[name].value = result[name];
+    statusLine.textContent = fields.start.value && fields.end.value
+      ? 'Review the draft before saving.'
+      : 'Review the draft and fill in the missing dates or times.';
+  } catch (error) {
+    statusLine.textContent = error.message;
+  } finally {
+    draftButton.disabled = false;
+  }
+};
+
+editor.onsubmit = async (event) => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(editor));
+  saveButton.disabled = true;
+  conflictLine.textContent = '';
+  statusLine.textContent = '';
+  try {
+    const overlaps = await request('/conflicts', data);
+    if (overlaps.length) {
+      const details = overlaps.map(item => item.title + ' (' + describe(item) + ')').join(', ');
+      conflictLine.textContent = 'Overlaps with ' + details;
+      return;
+    }
+    const saved = await request('/events', data);
+    const eventDate = localInput(saved.starts_at, data.all_day ? data.zone : defaultZone).slice(0, 10);
+    selectedDate = eventDate;
+    activeMonth = dateFromKey(eventDate);
+    closeEditor();
+    await refresh();
+    agendaStatus.textContent = 'Event saved.';
+    addSelected.focus();
+  } catch (error) {
+    statusLine.textContent = error.message;
+  } finally {
+    saveButton.disabled = false;
+  }
+};
+
+const helpForm = document.querySelector('#help-form');
+const helpQuestion = document.querySelector('#help-question');
+const helpSend = document.querySelector('#help-send');
+const helpLog = document.querySelector('#help-log');
+const helpStatus = document.querySelector('#help-status');
+
+function appendHelpMessage(speaker, text) {
+  const message = document.createElement('p');
+  message.className = 'chat-message ' + (speaker === 'You' ? 'user-message' : 'agent-message');
+  const label = document.createElement('strong');
+  label.textContent = speaker + ' · ';
+  message.append(label, text);
+  helpLog.append(message);
+  helpLog.scrollTop = helpLog.scrollHeight;
+}
+
+function showAgentRemoval(event) {
+  const controls = document.createElement('div');
+  controls.className = 'agent-actions';
+  const cancel = action('Cancel', () => {
+    controls.remove();
+    appendHelpMessage('Schedule agent', 'Removal canceled.');
+    helpQuestion.focus();
+  });
+  const confirm = action('Confirm remove', async () => {
+    cancel.disabled = true;
+    confirm.disabled = true;
+    try {
+      const reply = await request('/agent/confirm-removal', event);
+      controls.remove();
+      if (reply.removed_id === Number(fields.id.value)) closeEditor();
+      appendHelpMessage('Schedule agent', reply.answer);
+      await refresh();
+    } catch (error) {
+      helpStatus.textContent = error.message;
+      cancel.disabled = false;
+      confirm.disabled = false;
+    }
+  });
+  confirm.classList.add('remove');
+  controls.append(confirm, cancel);
+  helpLog.append(controls);
+  helpLog.scrollTop = helpLog.scrollHeight;
+}
+
+const agentPrompts = [...document.querySelectorAll('[data-prompt]')];
+const clearChat = document.querySelector('#clear-chat');
+let chatHistory = [];
+
+for (const button of agentPrompts) {
+  button.onclick = () => {
+    helpQuestion.value = button.dataset.prompt;
+    helpForm.requestSubmit();
+  };
+}
+
+clearChat.onclick = () => {
+  helpLog.replaceChildren();
+  helpStatus.textContent = '';
+  chatHistory = [];
+  helpQuestion.focus();
+};
+
+helpForm.onsubmit = async (event) => {
+  event.preventDefault();
+  const question = helpQuestion.value.trim();
+  if (!question || helpSend.disabled) return;
+  helpSend.disabled = true;
+  clearChat.disabled = true;
+  agentPrompts.forEach(button => { button.disabled = true; });
+  helpStatus.textContent = 'Checking your agenda…';
+  try {
+    const reply = await request('/agent', {question, zone: defaultZone, history: chatHistory});
+    if (reply.calendar_date) {
+      selectedDate = reply.calendar_date;
+      activeMonth = dateFromKey(selectedDate);
+    }
+    chatHistory = [...chatHistory, {question, answer: reply.answer.slice(0, 2500)}].slice(-4);
+    appendHelpMessage('You', question);
+    appendHelpMessage('Schedule help', reply.answer);
+    if (helpQuestion.value.trim() === question) helpQuestion.value = '';
+    helpStatus.textContent = '';
+    if (reply.calendar_date) await refresh();
+    if (reply.edit_event) {
+      edit(reply.edit_event);
+      for (const name of ['title', 'summary', 'start', 'end', 'zone']) fields[name].value = reply.changes[name];
+      fields.all_day.checked = reply.changes.all_day;
+    }
+    if (reply.pending_removal) showAgentRemoval(reply.pending_removal);
+  } catch (error) {
+    helpStatus.textContent = error.message;
+  } finally {
+    helpSend.disabled = false;
+    clearChat.disabled = false;
+    agentPrompts.forEach(button => { button.disabled = false; });
+  }
+};
+
+clearEditor();
+refresh().catch(error => { agendaStatus.textContent = error.message; });
+</script>
+</html>

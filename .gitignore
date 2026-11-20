@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+schedule.sqlite3*
+calendar-events-backup-*.json
+*.env
